@@ -103,8 +103,8 @@ class GameInterface(tk.Frame):
         """"""
 
         def action(event):
-            matrix, score, num_moves = engine.action(action_label)
-            self.update_GUI(matrix, score, num_moves)
+            matrix, _, num_moves = engine.action(action_label)
+            self.update_GUI(matrix, engine.score, num_moves)
 
         return action
 
@@ -112,12 +112,14 @@ class GameInterface(tk.Frame):
 engine = GameEngine()
 # GameInterface(engine)
 
-breakpoint()
+# breakpoint()
 
-quit()
+# quit()
 
 # NOTE: Temporary code - Will remove later
-game_interface = GameInterface(engine, use_agent=True)
+game_interface = GameInterface(engine)  # , use_agent=True)
+
+quit()
 
 import random
 

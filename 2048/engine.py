@@ -54,9 +54,9 @@ class GameEngine:
         prev_score = self.score
 
         getattr(self, action_label)()
-        if self.game_states:
-            self.add_new_value()
-            self.is_complete()
+        # if self.game_states:
+        #     # self.add_new_value()
+        #     self.is_complete()
 
         self.num_moves += 1
 

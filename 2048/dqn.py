@@ -60,10 +60,13 @@ def select_action(state, policy_net, epsilon):
     if random.uniform(0, 1) < epsilon:
         return random.randrange(4)  # 4 actions
 
-    # Exploitation
-    policy_net.eval()
-    with torch.no_grad():
-        return int(policy_net(state).max(1)[1].view(1, 1)[0][0])
+    else:
+        # Exploitation
+        state = torch.from_numpy(state).float().unsqueeze(0)
+        policy_net.eval()
+        with torch.no_grad():
+            action = int(policy_net(state).max(1)[1].view(1, 1)[0][0])
+            return action
 
 
 # TODO: Need to redo this function
@@ -109,8 +112,6 @@ def optimize_model(policy_net, memory, optimizer, batch_size, gamma):
     )
     expected_state_action_values = (next_state_values * gamma) + reward_batch
 
-    # import pdb; pdb.set_trace();
-
     # This is the calculation of the "temporal difference error"
     # loss = nn.SmoothL1Loss()(state_action_values, expected_state_action_values.unsqueeze(1))
     criterion = nn.MSELoss()
@@ -124,6 +125,7 @@ def optimize_model(policy_net, memory, optimizer, batch_size, gamma):
 
 
 def transform_state(state):
+    state = state.copy()
     state = np.reshape(state, -1)
     state[state == 0] = 1
     state = np.log2(state)
@@ -132,15 +134,14 @@ def transform_state(state):
     return new_state
 
 
+def get_log2_reward(reward):
+    if reward == 0:
+        return 0
+    else:
+        return np.log2(reward)
+
+
 NEGATIVE_REWARD = -10
-
-
-def get_log2_score(score):
-    log2_score = np.log2(score)
-    if log2_score == NEGATIVE_REWARD:
-        log2_score = 0
-    return log2_score
-
 
 # Hyperparameters
 EPISODES = 50000
@@ -152,8 +153,15 @@ EPS_DECAY = 200
 TARGET_UPDATE = 10
 
 
-policy_net = DQN()
+policy_net = DQN(
+    state_size=4 * 4 * 18,
+    action_size=4,
+    fc1_size=1024,
+    fc2_size=1024,
+    fc3_size=1024,
+)
 optimizer = optim.RMSprop(policy_net.parameters())
+# policy_net.to("cpu")
 
 # Memory is limited to storing 10K examples
 # Since this is a queue, we will be storing only the most recent games
@@ -166,13 +174,11 @@ total_scores = []
 
 # We iterate over a number of episodes
 for episode in range(EPISODES):
-    print("EPISODE", episode, "\tAVERAGE SCORE", average, "\tMAX VALUE", max_val)
+    avg_score = np.round(np.mean(total_scores), 2)
+    print(f"EPISODE: {episode} \tAVERAGE SCORE: {avg_score}\tMAX VALUE: {max_val}")
 
     # Initialize the game
     game_engine = GameEngine()
-    state = game_engine.matrix
-
-    state = transform_state(state)
 
     # Each episode lasts a full game i.e. until the game over state is reached
     while not game_engine.is_complete():
@@ -183,12 +189,17 @@ for episode in range(EPISODES):
 
         moved = False
         while not moved:
+            state = game_engine.matrix
+            state = transform_state(state)
+
             action = select_action(state, policy_net, epsilon)
             action_ = game_engine.ACTIONS[action]
-            next_state, reward, _ = game_engine.action(action_)
-            reward = get_log2_score(reward)
 
-            if not game_engine.is_complete() and torch.equal(next_state, state):
+            next_state, reward, _ = game_engine.action(action_)
+            next_state = transform_state(next_state)
+            reward = get_log2_reward(reward)
+
+            if not game_engine.is_complete() and np.array_equal(next_state, state):
                 reward = NEGATIVE_REWARD
             else:
                 moved = True
@@ -197,8 +208,7 @@ for episode in range(EPISODES):
                 next_state = None
             memory.push(state, action, reward, next_state)
 
-        # Update the state
-        state = next_state
+        game_engine.add_new_value()
         steps_done += 1
 
     total_scores.append(game_engine.score)
