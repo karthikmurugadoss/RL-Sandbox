@@ -50,17 +50,10 @@ class GameEngine:
     def action(self, action_label):
         """"""
         assert action_label in self.ACTIONS
-
         prev_score = self.score
-
         getattr(self, action_label)()
-        # if self.game_states:
-        #     # self.add_new_value()
-        #     self.is_complete()
-
-        self.num_moves += 1
-
         reward = self.score - prev_score
+        self.num_moves += 1
         return self.matrix, reward, self.num_moves
 
     def stack(self):

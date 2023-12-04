@@ -5,6 +5,7 @@ import random
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 
 from engine import GameEngine
@@ -60,16 +61,16 @@ def select_action(state, policy_net, epsilon):
     if random.uniform(0, 1) < epsilon:
         return random.randrange(4)  # 4 actions
 
+    # Exploitation
     else:
-        # Exploitation
         state = torch.from_numpy(state).float().unsqueeze(0)
         policy_net.eval()
         with torch.no_grad():
             action = int(policy_net(state).max(1)[1].view(1, 1)[0][0])
-            return action
+        policy_net.train()
+        return action
 
 
-# TODO: Need to redo this function
 def optimize_model(policy_net, memory, optimizer, batch_size, gamma):
     policy_net.train()
 
@@ -79,46 +80,18 @@ def optimize_model(policy_net, memory, optimizer, batch_size, gamma):
         return
 
     transitions = memory.sample(batch_size)
-
-    # In batch, each of ('state', 'action', 'reward', 'next_state') are lists
     batch = Transition(*zip(*transitions))
+    state_batch = np.stack(batch.state, axis=0)
+    state_batch = torch.from_numpy(state_batch).float()
+    action_batch = np.array(batch.action)
+    action_batch = torch.from_numpy(action_batch).unsqueeze(1)
+    reward_batch = np.array(batch.reward)
+    reward_batch = torch.from_numpy(reward_batch).unsqueeze(1).float()
 
-    # Create a boolean tensor which is True for which next_state is not None
-    non_final_mask = torch.tensor(tuple(map(lambda s: s is not None, batch.next_state)))
+    q_expected = policy_net(state_batch).gather(1, action_batch)
+    loss = F.mse_loss(q_expected, reward_batch)
 
-    # Create a torch tensor of next states
-    # NOTE: States that are none are dropped => Size of this tensor is shorter.
-    # This might cause issues later
-    non_final_next_states = torch.cat([s for s in batch.next_state if s is not None])
-
-    state_batch = torch.cat(batch.state)
-    action_batch = torch.tensor(batch.action)
-    reward_batch = torch.tensor(batch.reward).float()
-
-    # This is the forward pass
-
-    # NOTE: Commented since .gather gives an error
-    # state_action_values = policy_net(state_batch).gather(1, action_batch)
-    state_action_matrix = policy_net(state_batch)
-    state_action_values = state_action_matrix[
-        torch.arange(state_action_matrix.size(0)), action_batch
-    ]
-
-    # import pdb; pdb.set_trace();
-
-    next_state_values = torch.zeros(batch_size)
-    next_state_values[non_final_mask] = (
-        target_net(non_final_next_states).max(1)[0].detach()
-    )
-    expected_state_action_values = (next_state_values * gamma) + reward_batch
-
-    # This is the calculation of the "temporal difference error"
-    # loss = nn.SmoothL1Loss()(state_action_values, expected_state_action_values.unsqueeze(1))
-    criterion = nn.MSELoss()
-    loss = criterion(state_action_values, expected_state_action_values.unsqueeze(1))
-
-    # print(loss, state_action_values.shape, expected_state_action_values.unsqueeze(1).shape)
-
+    # Minimize the loss
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
@@ -134,6 +107,17 @@ def transform_state(state):
     return new_state
 
 
+def untransform_state(state):
+    """
+    Mainly used for debugging
+    """
+    reshaped_state = np.reshape(state, (4, 4, 18))
+    indices = np.argmax(reshaped_state, axis=2)
+    original_state = 2**indices
+    original_state[original_state == 1] = 0
+    return original_state
+
+
 def get_log2_reward(reward):
     if reward == 0:
         return 0
@@ -145,7 +129,7 @@ NEGATIVE_REWARD = -10
 
 # Hyperparameters
 EPISODES = 50000
-BATCH_SIZE = 128
+BATCH_SIZE = 1024
 GAMMA = 0.999
 EPS_START = 0.9
 EPS_END = 0.05
@@ -163,7 +147,7 @@ policy_net = DQN(
 optimizer = optim.RMSprop(policy_net.parameters())
 # policy_net.to("cpu")
 
-# Memory is limited to storing 10K examples
+# Memory is limited to storing 50K examples
 # Since this is a queue, we will be storing only the most recent games
 # This number should probably depend on the number of moves per episode
 memory = ReplayMemory(50000)
@@ -174,19 +158,14 @@ total_scores = []
 
 # We iterate over a number of episodes
 for episode in range(EPISODES):
-    avg_score = np.round(np.mean(total_scores), 2)
-    print(f"EPISODE: {episode} \tAVERAGE SCORE: {avg_score}\tMAX VALUE: {max_val}")
+    # Derive epsilon
+    epsilon = EPS_END + (EPS_START - EPS_END) * math.exp(-1.0 * steps_done / EPS_DECAY)
 
     # Initialize the game
     game_engine = GameEngine()
 
     # Each episode lasts a full game i.e. until the game over state is reached
     while not game_engine.is_complete():
-        # Derive epsilon
-        epsilon = EPS_END + (EPS_START - EPS_END) * math.exp(
-            -1.0 * steps_done / EPS_DECAY
-        )
-
         moved = False
         while not moved:
             state = game_engine.matrix
@@ -206,13 +185,22 @@ for episode in range(EPISODES):
 
             if game_engine.is_complete():
                 next_state = None
+
             memory.push(state, action, reward, next_state)
 
         game_engine.add_new_value()
-        steps_done += 1
+
+        if game_engine.is_complete():
+            next_state = None
+            break
+
+    steps_done += 1
 
     total_scores.append(game_engine.score)
     max_val = max(max_val, np.max(game_engine.matrix))
+    avg_score = np.round(np.mean(total_scores[-50:]), 2)
+    print(
+        f"EPISODE: {episode}\tSCORE: {game_engine.score}\tAVERAGE SCORE: {avg_score}\tMAX VALUE: {max_val}\tEPSILON: {epsilon}"
+    )
 
-    if next_state is None:
-        optimize_model(policy_net, memory, optimizer, BATCH_SIZE, GAMMA)
+    optimize_model(policy_net, memory, optimizer, BATCH_SIZE, GAMMA)
