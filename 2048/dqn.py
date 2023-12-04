@@ -131,10 +131,11 @@ NEGATIVE_REWARD = -10
 EPISODES = 50000
 BATCH_SIZE = 1024
 GAMMA = 0.999
-EPS_START = 0.9
-EPS_END = 0.05
-EPS_DECAY = 200
+EPS_START = 0.05
+EPS_END = 0.00001
+EPS_DECAY = 0.999
 TARGET_UPDATE = 10
+LR = 0.004
 
 
 policy_net = DQN(
@@ -144,22 +145,23 @@ policy_net = DQN(
     fc2_size=1024,
     fc3_size=1024,
 )
-optimizer = optim.RMSprop(policy_net.parameters())
+optimizer = optim.Adam(policy_net.parameters(), lr=LR)
 # policy_net.to("cpu")
 
-# Memory is limited to storing 50K examples
 # Since this is a queue, we will be storing only the most recent games
 # This number should probably depend on the number of moves per episode
-memory = ReplayMemory(50000)
+memory = ReplayMemory(100000)
 
 steps_done = 0
 max_val = 0
 total_scores = []
 
+epsilon = EPS_START
+
 # We iterate over a number of episodes
 for episode in range(EPISODES):
     # Derive epsilon
-    epsilon = EPS_END + (EPS_START - EPS_END) * math.exp(-1.0 * steps_done / EPS_DECAY)
+    # epsilon = EPS_END + (EPS_START - EPS_END) * math.exp(-1.0 * steps_done / EPS_DECAY)
 
     # Initialize the game
     game_engine = GameEngine()
@@ -195,6 +197,11 @@ for episode in range(EPISODES):
             break
 
     steps_done += 1
+
+    if steps_done % 5000 == 0:
+        epsilon = epsilon * 2
+    else:
+        epsilon = max(EPS_END, epsilon * EPS_DECAY)  # decrease epsilon
 
     total_scores.append(game_engine.score)
     max_val = max(max_val, np.max(game_engine.matrix))
